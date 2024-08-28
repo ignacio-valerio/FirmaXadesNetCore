@@ -24,23 +24,27 @@
 using FirmaXadesNetCore.Utils;
 using Org.BouncyCastle.Asn1;
 using Org.BouncyCastle.Asn1.Ocsp;
-using Org.BouncyCastle.Asn1.Pkcs;
 using Org.BouncyCastle.Asn1.X509;
-using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Ocsp;
-using Org.BouncyCastle.Security;
-using Org.BouncyCastle.X509;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
-using System.Net;
+using System.Net.Http;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+using X509Certificate = Org.BouncyCastle.X509.X509Certificate;
+using X509Extension = Org.BouncyCastle.Asn1.X509.X509Extension;
 
 namespace FirmaXadesNetCore.Clients
 {
-    public enum CertificateStatus { Good = 0, Revoked = 1, Unknown = 2 };
+    public enum CertificateStatus
+    {
+        Good = 0,
+        Revoked = 1,
+        Unknown = 2
+    };
 
     public class OcspClient
     {
@@ -59,12 +63,13 @@ namespace FirmaXadesNetCore.Clients
         /// <param name="issuerCert"></param>
         /// <param name="url"></param>
         /// <returns></returns>
-        public byte[] QueryBinary(X509Certificate eeCert, X509Certificate issuerCert, string url, GeneralName requestorName = null,
-            System.Security.Cryptography.X509Certificates.X509Certificate2 signCertificate = null)
+        public async Task<byte[]> QueryBinary(X509Certificate eeCert, X509Certificate issuerCert, string url,
+            GeneralName requestorName = null, X509Certificate2 signCertificate = null)
         {
-            OcspReq req = GenerateOcspRequest(issuerCert, eeCert.SerialNumber, requestorName, signCertificate);
+            var req = GenerateOcspRequest(issuerCert, eeCert.SerialNumber, requestorName, signCertificate);
 
-            byte[] binaryResp = PostData(url, req.GetEncoded(), "application/ocsp-request", "application/ocsp-response");
+            var binaryResp = await PostData(url, req.GetEncoded(), "application/ocsp-request",
+                "application/ocsp-response");
 
             return binaryResp;
         }
@@ -156,7 +161,6 @@ namespace FirmaXadesNetCore.Clients
                         cStatus = CertificateStatus.Unknown;
                     }
                 }
-
             }
             else
             {
@@ -178,90 +182,111 @@ namespace FirmaXadesNetCore.Clients
         /// <param name="contentType"></param>
         /// <param name="accept"></param>
         /// <returns></returns>
-        private byte[] PostData(string url, byte[] data, string contentType, string accept)
+        private async Task<byte[]> PostData(string url, byte[] data, string contentType, string accept)
         {
-            byte[] resp;
+            using var httpClient = new HttpClient();
 
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-            request.Method = "POST";
-            request.ContentType = contentType;
-            request.ContentLength = data.Length;
-            request.Accept = accept;
+            var content = new ByteArrayContent(data);
 
-            Stream stream = request.GetRequestStream();
-            stream.Write(data, 0, data.Length);
-            stream.Close();
-            HttpWebResponse response = (HttpWebResponse)request.GetResponse();
-            Stream respStream = response.GetResponseStream();
-            using (MemoryStream ms = new MemoryStream())
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+
+            content.Headers.Add("Accept", accept);
+
+            try
             {
-                respStream.CopyTo(ms);
-                resp = ms.ToArray();
-                respStream.Close();
-            }
+                var response = await httpClient.PostAsync(url, content);
 
-            return resp;
+                response.EnsureSuccessStatusCode();
+
+                var resp = await response.Content.ReadAsByteArrayAsync();
+
+                return resp;
+            }
+            catch (HttpRequestException e)
+            {
+                throw new Exception("Error al enviar la solicitud HTTP: " + e.Message);
+            }
         }
 
 
-        protected static Asn1Object GetExtensionValue(X509Certificate cert,
-                string oid)
+        private static Asn1Object GetExtensionValue(X509Certificate cert,
+            string oid)
         {
             if (cert == null)
             {
                 return null;
             }
 
-            byte[] bytes = cert.GetExtensionValue(new DerObjectIdentifier(oid)).GetOctets();
+            var bytes = cert.GetExtensionValue(new DerObjectIdentifier(oid)).GetOctets();
 
             if (bytes == null)
             {
                 return null;
             }
 
-            Asn1InputStream aIn = new Asn1InputStream(bytes);
+            var aIn = new Asn1InputStream(bytes);
 
             return aIn.ReadObject();
         }
 
 
-        private OcspReq GenerateOcspRequest(X509Certificate issuerCert, BigInteger serialNumber, GeneralName requestorName,
-            System.Security.Cryptography.X509Certificates.X509Certificate2 signCertificate)
+        private OcspReq GenerateOcspRequest(X509Certificate issuerCert, BigInteger serialNumber,
+            GeneralName requestorName, X509Certificate2 signCertificate)
         {
-            CertificateID id = new CertificateID(CertificateID.HashSha1, issuerCert, serialNumber);
+            var id = new CertificateID(CertificateID.HashSha1, issuerCert, serialNumber);
+
             return GenerateOcspRequest(id, requestorName, signCertificate);
         }
 
         private OcspReq GenerateOcspRequest(CertificateID id, GeneralName requestorName,
-            System.Security.Cryptography.X509Certificates.X509Certificate2 signCertificate)
+            X509Certificate2 signCertificate)
         {
-            OcspReqGenerator ocspRequestGenerator = new OcspReqGenerator();
+            if (signCertificate == null)
+            {
+                throw new ArgumentNullException(nameof(signCertificate), "El certificado no debe ser nulo.");
+            }
+
+            var ocspRequestGenerator = new OcspReqGenerator();
 
             ocspRequestGenerator.AddRequest(id);
 
             if (requestorName != null)
-            {                
+            {
                 ocspRequestGenerator.SetRequestorName(requestorName);
             }
 
-            ArrayList oids = new ArrayList();
-            Hashtable values = new Hashtable();
+            _nonceAsn1OctetString = new DerOctetString(BigInteger.ValueOf(DateTime.Now.Ticks).ToByteArray());
 
-            oids.Add(OcspObjectIdentifiers.PkixOcspNonce);
+            var extension = new X509Extension(false, _nonceAsn1OctetString);
 
-            _nonceAsn1OctetString = new DerOctetString(new DerOctetString(BigInteger.ValueOf(DateTime.Now.Ticks).ToByteArray()));
+            var extensionValue = new X509Extensions([OcspObjectIdentifiers.PkixOcspNonce], [extension]);
 
-            values.Add(OcspObjectIdentifiers.PkixOcspNonce, new X509Extension(false, _nonceAsn1OctetString));
-            ocspRequestGenerator.SetRequestExtensions(new X509Extensions(oids, values));
+            ocspRequestGenerator.SetRequestExtensions(extensionValue);
 
-            if (signCertificate != null)
+            var rsaPrivateKey = signCertificate.GetRSAPrivateKey();
+
+            if (rsaPrivateKey == null)
             {
-                return ocspRequestGenerator.Generate((RSACryptoServiceProvider)signCertificate.PrivateKey, CertUtil.GetCertChain(signCertificate));
+                throw new InvalidOperationException("El certificado no contiene una clave privada RSA.");
             }
-            else
+
+            using var rsaCsp = rsaPrivateKey as RSACryptoServiceProvider ?? new RSACryptoServiceProvider();
+
+            if (rsaPrivateKey is RSACryptoServiceProvider)
             {
-                return ocspRequestGenerator.Generate();
+                return ocspRequestGenerator.Generate(rsaCsp, CertUtil.GetCertChain(signCertificate));
             }
+
+            try
+            {
+                rsaCsp.ImportParameters(rsaPrivateKey.ExportParameters(true));
+            }
+            catch (CryptographicException ex)
+            {
+                throw new InvalidOperationException("No se pudo importar la clave privada RSA.", ex);
+            }
+
+            return ocspRequestGenerator.Generate(rsaCsp, CertUtil.GetCertChain(signCertificate));
         }
 
         #endregion

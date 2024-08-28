@@ -385,9 +385,7 @@ namespace FirmaXadesNetCore
         {
             SignatureDocument.CheckSignatureDocument(sigDocument);
 
-            XadesValidator validator = new XadesValidator();
-
-            return validator.Validate(sigDocument);
+            return XadesValidator.Validate(sigDocument);
         }
 
         #endregion
