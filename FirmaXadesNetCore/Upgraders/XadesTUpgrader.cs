@@ -28,20 +28,17 @@ using Microsoft.Xades;
 using System;
 using System.Collections;
 using System.Security.Cryptography.Xml;
+using System.Threading.Tasks;
 
 namespace FirmaXadesNetCore.Upgraders
 {
     class XadesTUpgrader : IXadesUpgrader
     {
-
         #region Public methods
 
         public void Upgrade(SignatureDocument signatureDocument, UpgradeParameters parameters)
         {
-            TimeStamp signatureTimeStamp;
-            ArrayList signatureValueElementXpaths;
-            byte[] signatureValueHash;
-            UnsignedProperties unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
+            var unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
 
             try
             {
@@ -50,20 +47,32 @@ namespace FirmaXadesNetCore.Upgraders
                     throw new Exception("La firma ya contiene un sello de tiempo");
                 }
 
-                XmlDsigExcC14NTransform excTransform = new XmlDsigExcC14NTransform();
+                var excTransform = new XmlDsigExcC14NTransform();
 
-                signatureValueElementXpaths = new ArrayList();
-                signatureValueElementXpaths.Add("ds:SignatureValue");
-                signatureValueHash = DigestUtil.ComputeHashValue(XMLUtil.ComputeValueOfElementList(signatureDocument.XadesSignature, signatureValueElementXpaths, excTransform), parameters.DigestMethod);
+                var signatureValueElementXpaths = new ArrayList
+                {
+                    "ds:SignatureValue"
+                };
 
-                byte[] tsa = parameters.TimeStampClient.GetTimeStamp(signatureValueHash, parameters.DigestMethod, true);
+                var signatureValueHash = DigestUtil.ComputeHashValue(
+                    XMLUtil.ComputeValueOfElementList(signatureDocument.XadesSignature, signatureValueElementXpaths,
+                        excTransform), parameters.DigestMethod);
 
-                signatureTimeStamp = new TimeStamp("SignatureTimeStamp");
-                signatureTimeStamp.Id = "SignatureTimeStamp-" + signatureDocument.XadesSignature.Signature.Id;
-                signatureTimeStamp.CanonicalizationMethod = new CanonicalizationMethod();
-                signatureTimeStamp.CanonicalizationMethod.Algorithm = excTransform.Algorithm;
-                signatureTimeStamp.EncapsulatedTimeStamp.PkiData = tsa;
-                signatureTimeStamp.EncapsulatedTimeStamp.Id = "SignatureTimeStamp-" + Guid.NewGuid().ToString();
+                var tsa = parameters.TimeStampClient.GetTimeStamp(signatureValueHash, parameters.DigestMethod, true);
+
+                var signatureTimeStamp = new TimeStamp("SignatureTimeStamp")
+                {
+                    Id = "SignatureTimeStamp-" + signatureDocument.XadesSignature.Signature.Id,
+                    CanonicalizationMethod = new CanonicalizationMethod
+                    {
+                        Algorithm = excTransform.Algorithm
+                    },
+                    EncapsulatedTimeStamp =
+                    {
+                        PkiData = tsa,
+                        Id = "SignatureTimeStamp-" + Guid.NewGuid()
+                    }
+                };
 
                 unsignedProperties.UnsignedSignatureProperties.SignatureTimeStampCollection.Add(signatureTimeStamp);
 

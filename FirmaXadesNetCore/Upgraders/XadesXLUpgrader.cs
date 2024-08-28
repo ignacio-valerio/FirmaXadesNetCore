@@ -52,33 +52,36 @@ namespace FirmaXadesNetCore.Upgraders
 
         public void Upgrade(SignatureDocument signatureDocument, UpgradeParameters parameters)
         {
-            UnsignedProperties unsignedProperties = null;
-            CertificateValues certificateValues = null;
+            var signingCertificate = signatureDocument.XadesSignature.GetSigningCertificate();
 
-            X509Certificate2 signingCertificate = signatureDocument.XadesSignature.GetSigningCertificate();
+            var unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
 
-            unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
-            unsignedProperties.UnsignedSignatureProperties.CompleteCertificateRefs = new CompleteCertificateRefs();
-            unsignedProperties.UnsignedSignatureProperties.CompleteCertificateRefs.Id =
-                "CompleteCertificates-" + Guid.NewGuid().ToString();
+            unsignedProperties.UnsignedSignatureProperties.CompleteCertificateRefs = new CompleteCertificateRefs
+            {
+                Id = "CompleteCertificates-" + Guid.NewGuid()
+            };
 
             unsignedProperties.UnsignedSignatureProperties.CertificateValues = new CertificateValues();
-            certificateValues = unsignedProperties.UnsignedSignatureProperties.CertificateValues;
-            certificateValues.Id = "CertificatesValues-" + Guid.NewGuid().ToString();
 
-            unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs = new CompleteRevocationRefs();
-            unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.Id =
-                "CompleteRev-" + Guid.NewGuid().ToString();
+            var certificateValues = unsignedProperties.UnsignedSignatureProperties.CertificateValues;
 
-            unsignedProperties.UnsignedSignatureProperties.RevocationValues = new RevocationValues();
-            unsignedProperties.UnsignedSignatureProperties.RevocationValues.Id =
-                "RevocationValues-" + Guid.NewGuid().ToString();
+            certificateValues.Id = "CertificatesValues-" + Guid.NewGuid();
 
-            AddCertificate(signingCertificate, unsignedProperties, false, parameters.OCSPServers, parameters.CRL,
+            unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs = new CompleteRevocationRefs
+            {
+                Id = "CompleteRev-" + Guid.NewGuid()
+            };
+
+            unsignedProperties.UnsignedSignatureProperties.RevocationValues = new RevocationValues
+            {
+                Id = "RevocationValues-" + Guid.NewGuid()
+            };
+
+            _ = AddCertificate(signingCertificate, unsignedProperties, false, parameters.OCSPServers, parameters.CRL,
                 parameters.DigestMethod, parameters.GetOcspUrlFromCertificate);
 
-            AddTSACertificates(unsignedProperties, parameters.OCSPServers, parameters.CRL, parameters.DigestMethod,
-                parameters.GetOcspUrlFromCertificate);
+            _ = AddTSACertificates(unsignedProperties, parameters.OCSPServers, parameters.CRL,
+                parameters.DigestMethod, parameters.GetOcspUrlFromCertificate);
 
             signatureDocument.XadesSignature.UnsignedProperties = unsignedProperties;
 
@@ -93,7 +96,7 @@ namespace FirmaXadesNetCore.Upgraders
 
         private string GetResponderName(ResponderID responderId, ref bool byKey)
         {
-            DerTaggedObject dt = (DerTaggedObject)responderId.ToAsn1Object();
+            var dt = (DerTaggedObject)responderId.ToAsn1Object();
 
             if (dt.TagNo == 1)
             {
@@ -101,18 +104,19 @@ namespace FirmaXadesNetCore.Upgraders
 
                 return new X500DistinguishedName(dt.GetObject().GetEncoded()).Name;
             }
-            else if (dt.TagNo == 2)
-            {
-                Asn1TaggedObject tagger = (Asn1TaggedObject)responderId.ToAsn1Object();
-                Asn1OctetString pubInfo = (Asn1OctetString)tagger.GetObject();
-                byKey = true;
 
-                return Convert.ToBase64String(pubInfo.GetOctets());
-            }
-            else
+            if (dt.TagNo != 2)
             {
                 return null;
             }
+
+            var tagger = (Asn1TaggedObject)responderId.ToAsn1Object();
+
+            var pubInfo = (Asn1OctetString)tagger.GetObject();
+
+            byKey = true;
+
+            return Convert.ToBase64String(pubInfo.GetOctets());
         }
 
         /// <summary>
@@ -135,18 +139,9 @@ namespace FirmaXadesNetCore.Upgraders
         /// <returns></returns>
         private bool CertificateChecked(X509Certificate2 cert, UnsignedProperties unsignedProperties)
         {
-            foreach (EncapsulatedX509Certificate item in unsignedProperties.UnsignedSignatureProperties
-                         .CertificateValues.EncapsulatedX509CertificateCollection)
-            {
-                X509Certificate2 certItem = new X509Certificate2(item.PkiData);
-
-                if (certItem.Thumbprint == cert.Thumbprint)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return (from EncapsulatedX509Certificate item in unsignedProperties.UnsignedSignatureProperties
+                    .CertificateValues.EncapsulatedX509CertificateCollection
+                select new X509Certificate2(item.PkiData)).Any(certItem => certItem.Thumbprint == cert.Thumbprint);
         }
 
         /// <summary>
@@ -168,19 +163,30 @@ namespace FirmaXadesNetCore.Upgraders
                     return;
                 }
 
-                string guidCert = Guid.NewGuid().ToString();
+                var guidCert = Guid.NewGuid().ToString();
 
-                Cert chainCert = new Cert();
-                chainCert.IssuerSerial.X509IssuerName = cert.IssuerName.Name;
-                chainCert.IssuerSerial.X509SerialNumber = cert.GetSerialNumberAsDecimalString();
+                var chainCert = new Cert
+                {
+                    IssuerSerial =
+                    {
+                        X509IssuerName = cert.IssuerName.Name,
+                        X509SerialNumber = cert.GetSerialNumberAsDecimalString()
+                    }
+                };
+
                 DigestUtil.SetCertDigest(cert.GetRawCertData(), digestMethod, chainCert.CertDigest);
+
                 chainCert.URI = "#Cert" + guidCert;
+
                 unsignedProperties.UnsignedSignatureProperties.CompleteCertificateRefs.CertRefs.CertCollection
                     .Add(chainCert);
 
-                EncapsulatedX509Certificate encapsulatedX509Certificate = new EncapsulatedX509Certificate();
-                encapsulatedX509Certificate.Id = "Cert" + guidCert;
-                encapsulatedX509Certificate.PkiData = cert.GetRawCertData();
+                var encapsulatedX509Certificate = new EncapsulatedX509Certificate
+                {
+                    Id = "Cert" + guidCert,
+                    PkiData = cert.GetRawCertData()
+                };
+
                 unsignedProperties.UnsignedSignatureProperties.CertificateValues.EncapsulatedX509CertificateCollection
                     .Add(encapsulatedX509Certificate);
             }
@@ -189,12 +195,13 @@ namespace FirmaXadesNetCore.Upgraders
 
             if (chain.Count > 1)
             {
-                X509ChainElementEnumerator enumerator = chain.GetEnumerator();
-                enumerator.MoveNext(); // el mismo certificado que el pasado por parametro
+                var enumerator = chain.GetEnumerator();
 
                 enumerator.MoveNext();
 
-                bool valid = ValidateCertificateByCRL(unsignedProperties, cert, enumerator.Current.Certificate, crlList,
+                enumerator.MoveNext();
+
+                var valid = ValidateCertificateByCRL(unsignedProperties, cert, enumerator.Current.Certificate, crlList,
                     digestMethod);
 
                 if (!valid)
@@ -204,101 +211,104 @@ namespace FirmaXadesNetCore.Upgraders
 
                     if (ocspCerts != null)
                     {
-                        X509Certificate2 startOcspCert = DetermineStartCert(ocspCerts);
+                        var startOcspCert = DetermineStartCert(ocspCerts);
 
                         if (!EquivalentDN(startOcspCert.IssuerName, enumerator.Current.Certificate.SubjectName))
                         {
                             var chainOcsp = CertUtil.GetCertChain(startOcspCert, ocspCerts);
 
-                            AddCertificate(chainOcsp.ChainElements[1].Certificate, unsignedProperties, true,
+                            _ = AddCertificate(chainOcsp.ChainElements[1].Certificate, unsignedProperties, true,
                                 ocspServers, crlList, digestMethod, addCertificateOcspUrl, ocspCerts);
                         }
                     }
                 }
 
-                AddCertificate(enumerator.Current.Certificate, unsignedProperties, true, ocspServers, crlList,
+                _ = AddCertificate(enumerator.Current.Certificate, unsignedProperties, true, ocspServers, crlList,
                     digestMethod, addCertificateOcspUrl, extraCerts);
             }
         }
 
         private bool ExistsCRL(CRLRefCollection collection, string issuer)
         {
-            foreach (CRLRef crlRef in collection)
-            {
-                if (crlRef.CRLIdentifier.Issuer == issuer)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return collection.Cast<CRLRef>().Any(crlRef => crlRef.CRLIdentifier.Issuer == issuer);
         }
 
-        private long? GetCRLNumber(Org.BouncyCastle.X509.X509Crl crlEntry)
+        private long? GetCRLNumber(X509Crl crlEntry)
         {
-            Asn1OctetString extValue = crlEntry.GetExtensionValue(X509Extensions.CrlNumber);
+            var extValue = crlEntry.GetExtensionValue(X509Extensions.CrlNumber);
 
-            if (extValue != null)
+            if (extValue == null)
             {
-                Asn1Object asn1Value = X509ExtensionUtilities.FromExtensionValue(extValue);
-
-                return DerInteger.GetInstance(asn1Value).PositiveValue.LongValue;
+                return null;
             }
 
-            return null;
+            var asn1Value = X509ExtensionUtilities.FromExtensionValue(extValue);
+
+            return DerInteger.GetInstance(asn1Value).PositiveValue.LongValue;
         }
 
         private bool ValidateCertificateByCRL(UnsignedProperties unsignedProperties, X509Certificate2 certificate,
             X509Certificate2 issuer,
             IEnumerable<X509Crl> crlList, FirmaXadesNetCore.Crypto.DigestMethod digestMethod)
         {
-            Org.BouncyCastle.X509.X509Certificate clientCert = certificate.ToBouncyX509Certificate();
-            Org.BouncyCastle.X509.X509Certificate issuerCert = issuer.ToBouncyX509Certificate();
+            var clientCert = certificate.ToBouncyX509Certificate();
+            var issuerCert = issuer.ToBouncyX509Certificate();
 
             foreach (var crlEntry in crlList)
             {
-                if (crlEntry.IssuerDN.Equivalent(issuerCert.SubjectDN) && crlEntry.NextUpdate.Value > DateTime.Now)
+                if (!crlEntry.IssuerDN.Equivalent(issuerCert.SubjectDN) ||
+                    crlEntry.NextUpdate.Value <= DateTime.Now)
                 {
-                    if (!crlEntry.IsRevoked(clientCert))
-                    {
-                        if (!ExistsCRL(
-                                unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.CRLRefs
-                                    .CRLRefCollection,
-                                issuer.Subject))
-                        {
-                            string idCrlValue = "CRLValue-" + Guid.NewGuid().ToString();
-
-                            CRLRef crlRef = new CRLRef();
-                            crlRef.CRLIdentifier.UriAttribute = "#" + idCrlValue;
-                            crlRef.CRLIdentifier.Issuer = issuer.Subject;
-                            crlRef.CRLIdentifier.IssueTime = crlEntry.ThisUpdate.ToLocalTime();
-
-                            var crlNumber = GetCRLNumber(crlEntry);
-                            if (crlNumber.HasValue)
-                            {
-                                crlRef.CRLIdentifier.Number = crlNumber.Value;
-                            }
-
-                            byte[] crlEncoded = crlEntry.GetEncoded();
-                            DigestUtil.SetCertDigest(crlEncoded, digestMethod, crlRef.CertDigest);
-
-                            CRLValue crlValue = new CRLValue();
-                            crlValue.PkiData = crlEncoded;
-                            crlValue.Id = idCrlValue;
-
-                            unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.CRLRefs
-                                .CRLRefCollection.Add(crlRef);
-                            unsignedProperties.UnsignedSignatureProperties.RevocationValues.CRLValues.CRLValueCollection
-                                .Add(crlValue);
-                        }
-
-                        return true;
-                    }
-                    else
-                    {
-                        throw new Exception("Certificado revocado");
-                    }
+                    continue;
                 }
+
+                if (crlEntry.IsRevoked(clientCert))
+                {
+                    throw new Exception("Certificado revocado");
+                }
+
+                if (ExistsCRL(unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.CRLRefs
+                        .CRLRefCollection, issuer.Subject))
+                {
+                    return true;
+                }
+
+                var idCrlValue = "CRLValue-" + Guid.NewGuid().ToString();
+
+                var crlRef = new CRLRef
+                {
+                    CRLIdentifier =
+                    {
+                        UriAttribute = "#" + idCrlValue,
+                        Issuer = issuer.Subject,
+                        IssueTime = crlEntry.ThisUpdate.ToLocalTime()
+                    }
+                };
+
+                var crlNumber = GetCRLNumber(crlEntry);
+
+                if (crlNumber.HasValue)
+                {
+                    crlRef.CRLIdentifier.Number = crlNumber.Value;
+                }
+
+                var crlEncoded = crlEntry.GetEncoded();
+
+                DigestUtil.SetCertDigest(crlEncoded, digestMethod, crlRef.CertDigest);
+
+                var crlValue = new CRLValue
+                {
+                    PkiData = crlEncoded,
+                    Id = idCrlValue
+                };
+
+                unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.CRLRefs
+                    .CRLRefCollection.Add(crlRef);
+
+                unsignedProperties.UnsignedSignatureProperties.RevocationValues.CRLValues.CRLValueCollection
+                    .Add(crlValue);
+
+                return true;
             }
 
             return false;
@@ -309,16 +319,19 @@ namespace FirmaXadesNetCore.Upgraders
             IEnumerable<OcspServer> ocspServers, FirmaXadesNetCore.Crypto.DigestMethod digestMethod,
             bool addCertificateOcspUrl)
         {
-            bool byKey = false;
-            List<OcspServer> finalOcspServers = new List<OcspServer>();
-            Org.BouncyCastle.X509.X509Certificate clientCert = client.ToBouncyX509Certificate();
-            Org.BouncyCastle.X509.X509Certificate issuerCert = issuer.ToBouncyX509Certificate();
+            var byKey = false;
 
-            OcspClient ocsp = new OcspClient();
+            var finalOcspServers = new List<OcspServer>();
+
+            var clientCert = client.ToBouncyX509Certificate();
+
+            var issuerCert = issuer.ToBouncyX509Certificate();
+
+            var ocsp = new OcspClient();
 
             if (addCertificateOcspUrl)
             {
-                string certOcspUrl = ocsp.GetAuthorityInformationAccessOcspUrl(issuerCert);
+                var certOcspUrl = ocsp.GetAuthorityInformationAccessOcspUrl(issuerCert);
 
                 if (!string.IsNullOrEmpty(certOcspUrl))
                 {
@@ -326,51 +339,63 @@ namespace FirmaXadesNetCore.Upgraders
                 }
             }
 
-            foreach (var ocspServer in ocspServers)
-            {
-                finalOcspServers.Add(ocspServer);
-            }
+            finalOcspServers.AddRange(ocspServers);
 
             foreach (var ocspServer in finalOcspServers)
             {
-                byte[] resp = await ocsp.QueryBinary(clientCert, issuerCert, ocspServer.Url, ocspServer.RequestorName,
+                var resp = await ocsp.QueryBinary(clientCert, issuerCert, ocspServer.Url, ocspServer.RequestorName,
                     ocspServer.SignCertificate);
 
-                FirmaXadesNetCore.Clients.CertificateStatus status = ocsp.ProcessOcspResponse(resp);
+                var status = ocsp.ProcessOcspResponse(resp);
 
-                if (status == FirmaXadesNetCore.Clients.CertificateStatus.Revoked)
+                if (status == Clients.CertificateStatus.Revoked)
                 {
                     throw new Exception("Certificado revocado");
                 }
-                else if (status == FirmaXadesNetCore.Clients.CertificateStatus.Good)
+
+                if (status != Clients.CertificateStatus.Good)
                 {
-                    Org.BouncyCastle.Ocsp.OcspResp r = new OcspResp(resp);
-                    byte[] rEncoded = r.GetEncoded();
-                    BasicOcspResp or = (BasicOcspResp)r.GetResponseObject();
-
-                    string guidOcsp = Guid.NewGuid().ToString();
-
-                    OCSPRef ocspRef = new OCSPRef();
-                    ocspRef.OCSPIdentifier.UriAttribute = "#OcspValue" + guidOcsp;
-                    DigestUtil.SetCertDigest(rEncoded, digestMethod, ocspRef.CertDigest);
-
-                    ResponderID rpId = or.ResponderId.ToAsn1Object();
-                    ocspRef.OCSPIdentifier.ResponderID = GetResponderName(rpId, ref byKey);
-                    ocspRef.OCSPIdentifier.ByKey = byKey;
-
-                    ocspRef.OCSPIdentifier.ProducedAt = or.ProducedAt.ToLocalTime();
-                    unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.OCSPRefs.OCSPRefCollection
-                        .Add(ocspRef);
-
-                    OCSPValue ocspValue = new OCSPValue();
-                    ocspValue.PkiData = rEncoded;
-                    ocspValue.Id = "OcspValue" + guidOcsp;
-                    unsignedProperties.UnsignedSignatureProperties.RevocationValues.OCSPValues.OCSPValueCollection.Add(
-                        ocspValue);
-
-                    return (from cert in or.GetCerts()
-                        select new X509Certificate2(cert.GetEncoded())).ToArray();
+                    continue;
                 }
+
+                var r = new OcspResp(resp);
+                var rEncoded = r.GetEncoded();
+                var or = (BasicOcspResp)r.GetResponseObject();
+
+                var guidOcsp = Guid.NewGuid().ToString();
+
+                var ocspRef = new OCSPRef
+                {
+                    OCSPIdentifier =
+                    {
+                        UriAttribute = "#OcspValue" + guidOcsp
+                    }
+                };
+
+                DigestUtil.SetCertDigest(rEncoded, digestMethod, ocspRef.CertDigest);
+
+                var rpId = or.ResponderId.ToAsn1Object();
+
+                ocspRef.OCSPIdentifier.ResponderID = GetResponderName(rpId, ref byKey);
+
+                ocspRef.OCSPIdentifier.ByKey = byKey;
+
+                ocspRef.OCSPIdentifier.ProducedAt = or.ProducedAt.ToLocalTime();
+
+                unsignedProperties.UnsignedSignatureProperties.CompleteRevocationRefs.OCSPRefs.OCSPRefCollection
+                    .Add(ocspRef);
+
+                var ocspValue = new OCSPValue
+                {
+                    PkiData = rEncoded,
+                    Id = "OcspValue" + guidOcsp
+                };
+
+                unsignedProperties.UnsignedSignatureProperties.RevocationValues.OCSPValues.OCSPValueCollection.Add(
+                    ocspValue);
+
+                return (from cert in or.GetCerts()
+                    select new X509Certificate2(cert.GetEncoded())).ToArray();
             }
 
             throw new Exception("El certificado no ha podido ser validado");
@@ -385,16 +410,8 @@ namespace FirmaXadesNetCore.Upgraders
             for (var i = 0; i < certs.Length && isIssuer; i++)
             {
                 currentCert = certs[i];
-                isIssuer = false;
 
-                for (int j = 0; j < certs.Length; j++)
-                {
-                    if (EquivalentDN(certs[j].IssuerName, currentCert.SubjectName))
-                    {
-                        isIssuer = true;
-                        break;
-                    }
-                }
+                isIssuer = certs.Any(t => EquivalentDN(t.IssuerName, currentCert.SubjectName));
             }
 
             return currentCert;
@@ -426,17 +443,13 @@ namespace FirmaXadesNetCore.Upgraders
 
         private void TimeStampCertRefs(SignatureDocument signatureDocument, UpgradeParameters parameters)
         {
-            TimeStamp xadesXTimeStamp;
-            ArrayList signatureValueElementXpaths;
-            byte[] signatureValueHash;
+            var nodoFirma = signatureDocument.XadesSignature.GetSignatureElement();
 
-            XmlElement nodoFirma = signatureDocument.XadesSignature.GetSignatureElement();
-
-            XmlNamespaceManager nm = new XmlNamespaceManager(signatureDocument.Document.NameTable);
+            var nm = new XmlNamespaceManager(signatureDocument.Document.NameTable);
             nm.AddNamespace("xades", XadesSignedXml.XadesNamespaceUri);
             nm.AddNamespace("ds", SignedXml.XmlDsigNamespaceUrl);
 
-            XmlNode xmlCompleteCertRefs = nodoFirma.SelectSingleNode(
+            var xmlCompleteCertRefs = nodoFirma.SelectSingleNode(
                 "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:CompleteCertificateRefs",
                 nm);
 
@@ -445,29 +458,35 @@ namespace FirmaXadesNetCore.Upgraders
                 signatureDocument.UpdateDocument();
             }
 
-            signatureValueElementXpaths = new ArrayList();
-            signatureValueElementXpaths.Add("ds:SignatureValue");
-            signatureValueElementXpaths.Add(
-                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:SignatureTimeStamp");
-            signatureValueElementXpaths.Add(
-                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:CompleteCertificateRefs");
-            signatureValueElementXpaths.Add(
-                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:CompleteRevocationRefs");
-            signatureValueHash = DigestUtil.ComputeHashValue(
+            var signatureValueElementXpaths = new ArrayList
+            {
+                "ds:SignatureValue",
+                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:SignatureTimeStamp",
+                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:CompleteCertificateRefs",
+                "ds:Object/xades:QualifyingProperties/xades:UnsignedProperties/xades:UnsignedSignatureProperties/xades:CompleteRevocationRefs"
+            };
+
+            var signatureValueHash = DigestUtil.ComputeHashValue(
                 XMLUtil.ComputeValueOfElementList(signatureDocument.XadesSignature, signatureValueElementXpaths),
                 parameters.DigestMethod);
 
-            byte[] tsa = parameters.TimeStampClient.GetTimeStamp(signatureValueHash, parameters.DigestMethod, true);
+            var tsa = parameters.TimeStampClient.GetTimeStamp(signatureValueHash, parameters.DigestMethod, true);
 
-            xadesXTimeStamp = new TimeStamp("SigAndRefsTimeStamp");
-            xadesXTimeStamp.Id = "SigAndRefsStamp-" + signatureDocument.XadesSignature.Signature.Id;
-            xadesXTimeStamp.EncapsulatedTimeStamp.PkiData = tsa;
-            xadesXTimeStamp.EncapsulatedTimeStamp.Id = "SigAndRefsStamp-" + Guid.NewGuid().ToString();
-            UnsignedProperties unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
+            var xadesXTimeStamp = new TimeStamp("SigAndRefsTimeStamp")
+            {
+                Id = "SigAndRefsStamp-" + signatureDocument.XadesSignature.Signature.Id,
+                EncapsulatedTimeStamp =
+                {
+                    PkiData = tsa,
+                    Id = "SigAndRefsStamp-" + Guid.NewGuid()
+                }
+            };
+
+            var unsignedProperties = signatureDocument.XadesSignature.UnsignedProperties;
 
             unsignedProperties.UnsignedSignatureProperties.RefsOnlyTimeStampFlag = false;
-            unsignedProperties.UnsignedSignatureProperties.SigAndRefsTimeStampCollection.Add(xadesXTimeStamp);
 
+            unsignedProperties.UnsignedSignatureProperties.SigAndRefsTimeStampCollection.Add(xadesXTimeStamp);
 
             signatureDocument.XadesSignature.UnsignedProperties = unsignedProperties;
         }

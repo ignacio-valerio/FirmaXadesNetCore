@@ -43,8 +43,8 @@ namespace FirmaXadesNetCore.Upgraders
 
         public void Upgrade(SignatureDocument sigDocument, SignatureFormat toFormat, UpgradeParameters parameters)
         {
-            XadesTUpgrader xadesTUpgrader = null;
-            XadesXLUpgrader xadesXLUpgrader = null;
+            XadesTUpgrader xadesTUpgrader;
+            XadesXLUpgrader xadesXLUpgrader;
 
             SignatureDocument.CheckSignatureDocument(sigDocument);
 
